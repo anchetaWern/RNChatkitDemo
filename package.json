@@ -1,0 +1,38 @@
+{
+  "name": "RNChatkitDemo",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "start": "node node_modules/react-native/local-cli/cli.js start",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@pusher/chatkit-client": "^1.4.1",
+    "axios": "^0.18.0",
+    "react": "16.8.3",
+    "react-native": "0.59.1",
+    "react-native-audio-toolkit": "^1.0.6",
+    "react-native-config": "^0.11.7",
+    "react-native-document-picker": "^2.3.0",
+    "react-native-fs": "^2.13.3",
+    "react-native-gesture-handler": "^1.1.0",
+    "react-native-gifted-chat": "^0.7.2",
+    "react-native-mime-types": "^2.2.1",
+    "react-native-modal": "^9.0.0",
+    "react-native-vector-icons": "^6.4.2",
+    "react-native-video": "^4.4.0",
+    "react-navigation": "^3.5.1",
+    "rn-fetch-blob": "^0.10.15"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.4.0",
+    "@babel/runtime": "^7.4.0",
+    "babel-jest": "^24.5.0",
+    "jest": "^24.5.0",
+    "metro-react-native-babel-preset": "^0.53.1",
+    "react-test-renderer": "16.8.3"
+  },
+  "jest": {
+    "preset": "react-native"
+  }
+}
