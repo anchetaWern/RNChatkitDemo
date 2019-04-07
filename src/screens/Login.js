@@ -70,7 +70,8 @@ class Login extends Component {
       is_loading: false,
       username: ""
     });
-  }
+
+  };
 }
 
 export default Login;

@@ -1,10 +1,25 @@
 import React, { Component } from "react";
 import { View, Text, ActivityIndicator, FlatList, TouchableOpacity, Alert } from "react-native";
-import { GiftedChat, Send } from "react-native-gifted-chat";
+import { GiftedChat, Send, Message } from "react-native-gifted-chat";
 import { ChatManager, TokenProvider } from "@pusher/chatkit-client";
 import axios from "axios";
 import Config from "react-native-config";
 import Icon from "react-native-vector-icons/FontAwesome";
+import { DocumentPicker, DocumentPickerUtil } from "react-native-document-picker";
+import * as mime from "react-native-mime-types";
+import Modal from "react-native-modal";
+import RNFetchBlob from "rn-fetch-blob";
+
+const Blob = RNFetchBlob.polyfill.Blob;
+const fs = RNFetchBlob.fs;
+window.XMLHttpRequest = RNFetchBlob.polyfill.XMLHttpRequest;
+window.Blob = Blob;
+
+import RNFS from "react-native-fs";
+
+import ChatBubble from "../components/ChatBubble";
+import AudioPlayer from "../components/AudioPlayer";
+import VideoPlayer from "../components/VideoPlayer";
 
 const CHATKIT_INSTANCE_LOCATOR_ID = `v1:us1:${Config.CHATKIT_INSTANCE_LOCATOR_ID}`;
 const CHATKIT_SECRET_KEY = Config.CHATKIT_SECRET_KEY;
@@ -18,6 +33,15 @@ class Chat extends Component {
     const { params } = navigation.state;
     return {
       headerTitle: params.room_name,
+      headerRight: (
+        <View style={styles.header_right}>
+          <TouchableOpacity style={styles.header_button_container} onPress={params.showUsersModal}>
+            <View style={styles.header_button}>
+              <Text style={styles.header_button_text}>Users</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+      ),
       headerStyle: {
         backgroundColor: "#333"
       },
@@ -33,8 +57,19 @@ class Chat extends Component {
     room_users: null,
     messages: [],
     is_initialized: false,
-    show_load_earlier: false
-  }
+    is_picking_file: false,
+    show_load_earlier: false,
+
+    is_video_modal_visible: false,
+    is_last_viewed_message_modal_visible: false,
+    is_users_modal_visible: false,
+
+    is_typing: false,
+    typing_user: null,
+
+    viewed_user: null,
+    viewed_message: null
+  };
 
 
   constructor(props) {
@@ -43,10 +78,21 @@ class Chat extends Component {
 
     this.user_id = navigation.getParam("user_id");
     this.room_id = navigation.getParam("room_id");
+    this.is_room_admin = navigation.getParam("is_room_admin");
+
+    this.modal_types = {
+      video: 'is_video_modal_visible',
+      last_viewed_message: 'is_last_viewed_message_modal_visible',
+      users: 'is_users_modal_visible'
+    }
   }
 
 
   async componentDidMount() {
+
+    this.props.navigation.setParams({
+      showUsersModal: this.showUsersModal
+    });
 
     try {
       const chatManager = new ChatManager({
@@ -61,12 +107,15 @@ class Chat extends Component {
       await this.currentUser.subscribeToRoomMultipart({
         roomId: this.room_id,
         hooks: {
-          onMessage: this.onReceive
+          onMessage: this.onReceive,
+          onUserStartedTyping: this.startTyping,
+          onUserStoppedTyping: this.stopTyping
         }
       });
 
       await this.setState({
-        is_initialized: true
+        is_initialized: true,
+        room_users: this.currentUser.users
       });
 
     } catch (chat_mgr_err) {
@@ -75,6 +124,22 @@ class Chat extends Component {
   }
 
   //
+
+  startTyping = (user) => {
+    this.setState({
+      is_typing: true,
+      typing_user: user.name
+    });
+  }
+
+
+  stopTyping = (user) => {
+    this.setState({
+      is_typing: false,
+      typing_user: null
+    });
+  }
+
 
   onReceive = async (data) => {
     this.last_message_id = data.id;
@@ -92,20 +157,40 @@ class Chat extends Component {
 
 
   onSend = async ([message]) => {
+    let message_parts = [
+      { type: "text/plain", content: message.text }
+    ];
+
+    if (this.attachment) {
+      const { file_blob, file_name, file_type } = this.attachment;
+      message_parts.push({
+        file: file_blob,
+        name: file_name,
+        type: file_type
+      });
+    }
+
     this.setState({
       is_sending: true
     });
 
     try {
-      await this.currentUser.sendSimpleMessage({
+      if (this.last_message_id) {
+        const set_cursor_response = await this.currentUser.setReadCursor({
+          roomId: this.room_id,
+          position: this.last_message_id
+        });
+      }
+
+      await this.currentUser.sendMultipartMessage({
         roomId: this.room_id,
-        text: message.text,
+        parts: message_parts
       });
 
-      this.setState({
+      this.attachment = null;
+      await this.setState({
         is_sending: false
       });
-
     } catch (send_msg_err) {
       console.log("error sending message: ", send_msg_err);
     }
@@ -128,7 +213,12 @@ class Chat extends Component {
 
 
   getMessage = async ({ id, sender, parts, createdAt }) => {
+
     const text = parts.find(part => part.partType === 'inline').payload.content;
+    const attachment = parts.find(part => part.partType === 'attachment');
+
+    const attachment_url = (attachment) ? await attachment.payload.url() : null;
+    const attachment_type = (attachment) ? attachment.payload.type : null;
 
     const msg_data = {
       _id: id,
@@ -140,6 +230,18 @@ class Chat extends Component {
         avatar: `https://ui-avatars.com/api/?background=d88413&color=FFF&name=${sender.name}`
       }
     };
+
+    if (attachment) {
+      Object.assign(msg_data, { attachment: { url: attachment_url, type: attachment_type } });
+    }
+
+    if (attachment && attachment_type.indexOf('video') !== -1) {
+      Object.assign(msg_data, { video: attachment_url });
+    }
+
+    if (attachment && attachment_type.indexOf('image') !== -1) {
+      Object.assign(msg_data, { image: attachment_url });
+    }
 
     return {
       message: msg_data
@@ -153,13 +255,63 @@ class Chat extends Component {
     }
   };
 
+
+  renderMessage = (msg) => {
+    const { attachment } = msg.currentMessage;
+    const renderBubble = (attachment && attachment.type.indexOf('audio') !== -1) ? this.renderPreview.bind(this, attachment.url) : null;
+    const onLongPress = (attachment  && attachment.type.indexOf('video') !== -1) ? this.onLongPressMessageBubble.bind(this, attachment.url) : null;
+
+    const modified_msg = {
+      ...msg,
+      renderBubble,
+      onLongPress,
+      videoProps: {
+        paused: true
+      }
+    }
+
+    return <Message {...modified_msg} />
+  }
+
+  //
+
+  onLongPressMessageBubble = (link) => {
+    this.setState({
+      is_video_modal_visible: true,
+      video_uri: link
+    });
+  }
+
+
+  renderPreview = (uri, bubbleProps) => {
+    const text_color = (bubbleProps.position == 'right') ? '#FFF' : '#000';
+    const modified_bubbleProps = {
+      ...bubbleProps
+    };
+
+    return (
+      <ChatBubble {...modified_bubbleProps}>
+        <AudioPlayer url={uri} />
+      </ChatBubble>
+    );
+  }
+
   //
 
   render() {
     const {
       is_initialized,
+      room_users,
       messages,
-      show_load_earlier
+      video_uri,
+      is_video_modal_visible,
+      is_last_viewed_message_modal_visible,
+      viewed_user,
+      viewed_message,
+      is_users_modal_visible,
+      is_add_user_modal_visible,
+      show_load_earlier,
+      typing_user
     } = this.state;
 
     return (
@@ -181,16 +333,121 @@ class Chat extends Component {
             }}
             renderActions={this.renderCustomActions}
             renderSend={this.renderSend}
+            renderMessage={this.renderMessage}
+            onInputTextChanged={this.onTyping}
+            renderFooter={this.renderFooter}
+            extraData={{ typing_user }}
+            onPressAvatar={this.viewLastReadMessage}
 
             loadEarlier={show_load_earlier}
             onLoadEarlier={this.loadEarlierMessages}
           />
         )}
+
+        <Modal isVisible={is_video_modal_visible}>
+          <View style={styles.modal}>
+            <TouchableOpacity onPress={this.hideModal.bind(this, 'video')}>
+              <Icon name={"close"} size={20} color={"#565656"} style={styles.close} />
+            </TouchableOpacity>
+            <VideoPlayer uri={video_uri} />
+          </View>
+        </Modal>
+
+        {
+          viewed_user && viewed_message &&
+          <Modal isVisible={is_last_viewed_message_modal_visible}>
+            <View style={styles.modal}>
+              <View style={styles.modal_header}>
+                <Text style={styles.modal_header_text}>Last viewed msg: {viewed_user}</Text>
+                <TouchableOpacity onPress={this.hideModal.bind(this, 'last_viewed_message')}>
+                  <Icon name={"close"} size={20} color={"#565656"} style={styles.close} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.modal_body}>
+                <Text>Message: {viewed_message}</Text>
+              </View>
+            </View>
+          </Modal>
+        }
+
+        {
+          room_users &&
+          <Modal isVisible={is_users_modal_visible}>
+            <View style={styles.modal}>
+              <View style={styles.modal_header}>
+                <Text style={styles.modal_header_text}>Users</Text>
+                <TouchableOpacity onPress={this.hideModal.bind(this, 'users')}>
+                  <Icon name={"close"} size={20} color={"#565656"} style={styles.close} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.modal_body}>
+                <FlatList
+                  keyExtractor={item => item.id.toString()}
+                  data={room_users}
+                  renderItem={this.renderUser}
+                />
+              </View>
+            </View>
+          </Modal>
+        }
       </View>
     );
   }
 
   //
+
+  viewLastReadMessage = async (data) => {
+    try {
+      const cursor = await this.currentUser.readCursor({
+        userId: data.userId,
+        roomId: this.room_id
+      });
+
+      const viewed_message = this.state.messages.find(msg => msg._id == cursor.position);
+
+      await this.setState({
+        viewed_user: data.name,
+        is_last_viewed_message_modal_visible: true,
+        viewed_message: viewed_message.text ? viewed_message.text : ''
+      });
+    } catch (view_last_msg_err) {
+      console.log("error viewing last message: ", view_last_msg_err);
+    }
+  }
+
+
+  showUsersModal = () => {
+    this.setState({
+      is_users_modal_visible: true
+    });
+  }
+
+  //
+
+  renderUser = ({ item }) => {
+    const online_status = item.presenceStore[item.id];
+
+    return (
+      <View style={styles.list_item_body}>
+        <View style={styles.list_item}>
+          <View style={[styles.status_indicator, styles[online_status]]}></View>
+          <Text style={styles.list_item_text}>{item.name}</Text>
+        </View>
+      </View>
+    );
+  }
+
+  //
+
+  hideModal = (type) => {
+    const modal = this.modal_types[type];
+    this.setState({
+      [modal]: false
+    });
+  }
+
 
   renderCustomActions = () => {
     if (!this.state.is_picking_file) {
@@ -213,6 +470,66 @@ class Chat extends Component {
   }
 
   //
+
+  openFilePicker = async () => {
+    await this.setState({
+      is_picking_file: true
+    });
+
+    DocumentPicker.show({
+      filetype: [DocumentPickerUtil.allFiles()],
+    }, async (err, file) => {
+      if (!err) {
+
+        try {
+          const file_type = mime.contentType(file.fileName);
+          const base64 = await RNFS.readFile(file.uri, "base64");
+
+          const file_blob = await Blob.build(base64, { type: `${file_type};BASE64` });
+
+          this.attachment = {
+            file_blob: file_blob,
+            file_name: file.fileName,
+            file_type: file_type
+          };
+
+          Alert.alert("Success", "File attached!");
+
+        } catch (attach_err) {
+          console.log("error attaching file: ", attach_err);
+        }
+      }
+
+      this.setState({
+        is_picking_file: false
+      });
+    });
+  }
+
+
+  onTyping = async () => {
+    try {
+      await this.currentUser.isTypingIn({ roomId: this.room_id });
+    } catch (typing_err) {
+      console.log("error setting is typing: ", typing_err);
+    }
+  }
+
+
+  renderFooter = () => {
+    const { is_typing, typing_user } = this.state;
+    if (is_typing) {
+      return (
+        <View style={styles.footerContainer}>
+          <Text style={styles.footerText}>
+            {typing_user} is typing...
+          </Text>
+        </View>
+      );
+    }
+    return null;
+  }
+
 
   loadEarlierMessages = async () => {
     this.setState({
