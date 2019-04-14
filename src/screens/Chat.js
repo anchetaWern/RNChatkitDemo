@@ -77,7 +77,6 @@ class Chat extends Component {
   //
 
   onReceive = async (data) => {
-    this.last_message_id = data.id;
     const { message } = await this.getMessage(data);
     await this.setState((previousState) => ({
       messages: GiftedChat.append(previousState.messages, message)
