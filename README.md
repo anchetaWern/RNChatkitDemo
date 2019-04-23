@@ -8,6 +8,8 @@ A demo chat app built with React Native and Chatkit which has the following feat
 -  File uploads
 -  Show online and offline users
 
+You can read the full tutorial at: [Build a demo chat app with React Native and Chatkit](https://pusher.com/tutorials/chatroom-app-react-native)
+
 ### Prerequisites
 
 -   React Native development environment
